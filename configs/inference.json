@@ -1,0 +1,38 @@
+{
+    "model_type": "autoencoder",
+    "sample_size": 32768,
+    "sample_rate": 16000,
+    "audio_channels": 1,
+    "model": {
+        "encoder": {
+            "type": "dac",
+            "config": {
+                "in_channels": 1,
+                "latent_dim": 128,
+                "d_model": 128,
+                "strides": [4, 4, 5, 5]
+            }
+        },
+        "decoder": {
+            "type": "bigvgan",
+            "config": {
+                "out_channels": 1,
+                "latent_dim": 64,
+                "resblock": "1",
+                "upsample_rates": [5, 5, 4, 4],
+                "upsample_kernel_sizes": [10, 10, 8, 8],
+                "upsample_initial_channel": 512,
+                "resblock_kernel_sizes": [3, 7, 11],
+                "resblock_dilation_sizes": [[1, 3, 5], [1, 3, 5], [1, 3, 5]],
+                "activation": "snakebeta",
+                "snake_logscale": true
+            }
+        },
+        "bottleneck": {
+            "type": "vae"
+        },
+        "latent_dim": 64,
+        "downsampling_ratio": 400,
+        "io_channels": 1
+    }
+}

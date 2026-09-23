@@ -1,0 +1,9 @@
+{
+    "dataset_type": "audio_dir",
+    "datasets": [
+        {
+            "id": "train",
+            "path": "/path/to/librilight/audio_dir"
+        }
+    ]
+}

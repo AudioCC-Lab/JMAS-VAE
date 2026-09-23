@@ -1,0 +1,150 @@
+{
+    "model_type": "autoencoder",
+    "sample_size": 32768,
+    "sample_rate": 16000,
+    "audio_channels": 1,
+
+    "adaptive_loss_weight": true,
+    "adaptive_loss_keys": [
+        "ssl_frame_loss",
+        "ssl_mat_loss"
+    ],
+    "reference_loss_key": "mrstft_loss",
+    "model_param_names": [
+        "encoder.proj_out.weight",
+        "encoder.proj_out.bias"
+    ],
+
+    "model": {
+        "encoder": {
+            "type": "dac",
+            "config": {
+                "in_channels": 1,
+                "latent_dim": 128,
+                "d_model": 128,
+                "strides": [4, 4, 5, 5]
+            }
+        },
+        "decoder": {
+            "type": "bigvgan",
+            "config": {
+                "out_channels": 1,
+                "latent_dim": 64,
+                "resblock": "1",
+                "upsample_rates": [5, 5, 4, 4],
+                "upsample_kernel_sizes": [10, 10, 8, 8],
+                "upsample_initial_channel": 512,
+                "resblock_kernel_sizes": [3, 7, 11],
+                "resblock_dilation_sizes": [[1, 3, 5], [1, 3, 5], [1, 3, 5]],
+                "activation": "snakebeta",
+                "snake_logscale": true
+            }
+        },
+        "bottleneck": {
+            "type": "jmasvae_ssl_new",
+            "config": {
+                "wavlm_layers": 23,
+                "latent_dim": 64,
+                "use_latent_subspace":false,
+                "ssl_ratio": 1,
+                "m1": 0.5,
+                "m2": 0.25
+            }
+        },
+        "latent_dim": 64,
+        "downsampling_ratio": 400,
+        "io_channels": 1
+    },
+    "training": {
+        "learning_rate": 3e-5,
+        "warmup_steps": 0,
+        "use_ema": true,
+        "latent_subspace":{
+            "enable": false,
+            "ssl_ratio": 1
+        },
+        "optimizer_configs": {
+            "autoencoder": {
+                "optimizer": {
+                    "type": "AdamW",
+                    "config": {
+                        "betas": [0.8, 0.99],
+                        "lr": 1e-4
+                    }
+                },
+                "scheduler": {
+                    "type": "ExponentialLR",
+                    "config": {
+                        "gamma": 0.999996
+                    }
+                }
+            },
+            "discriminator": {
+                "optimizer": {
+                    "type": "AdamW",
+                    "config": {
+                        "betas": [0.8, 0.99],
+                        "lr": 1e-4
+                    }
+                },
+                "scheduler": {
+                    "type": "ExponentialLR",
+                    "config": {
+                        "gamma": 0.999996
+                    }
+                }
+            }
+        },
+        "loss_configs": {
+            "discriminator": {
+                "type": "big_vgan",
+                "config": {
+                    "use_hinge": false,
+                    "periods": [2, 3, 5, 7, 11],
+                    "cqtd_filters": 32,
+                    "cqtd_max_filters": 1024,
+                    "cqtd_filters_scale": 1,
+                    "cqtd_dilations": [1, 2, 4],
+                    "cqtd_in_channels": 1,
+                    "cqtd_out_channels": 1,
+                    "cqtd_hop_lengths": [512, 256, 256],
+                    "cqtd_n_octaves": [8, 8, 8],
+                    "cqtd_bins_per_octaves": [24, 36, 48],
+                    "fmin": 32.7
+                },
+                "weights": {
+                    "adversarial": 0.1,
+                    "feature_matching": 2.0
+                }
+            },
+            "spectral": {
+                "type": "mrstft",
+                "config": {
+                    "fft_sizes": [2048, 1024, 512, 256, 128, 64, 32],
+                    "hop_sizes": [512, 256, 128, 64, 32, 16, 8],
+                    "win_lengths": [2048, 1024, 512, 256, 128, 64, 32],
+                    "perceptual_weighting": true
+                },
+                "weights": {
+                    "mrstft": 1.0
+                }
+            },
+            "time": {
+                "type": "l1",
+                "weights": {
+                    "l1": 0.0
+                }
+            },
+            "bottleneck": {
+                "type": "kl",
+                "weights": {
+                    "kl": 1e-3,
+                    "ssl": 2.5
+                }
+            }
+        },
+        "demo": {
+            "demo_every": 2000
+        }
+    }
+}
