@@ -146,7 +146,7 @@ def process_encode(inf_audio, model, device, latent_dir, use_mean=False):
 _LEGACY_WARNED = False
 
 def _warn_legacy_latents():
-    """旧版 .pt 只存了原始采样率下的长度，重建长度只能近似，整轮提示一次即可。"""
+    
     global _LEGACY_WARNED
     if _LEGACY_WARNED:
         return
