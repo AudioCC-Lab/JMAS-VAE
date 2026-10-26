@@ -8,6 +8,8 @@ import torchaudio
 from typing import Optional
 from .transformer import ContinuousTransformer
 class Bottleneck(nn.Module):
+    supports_mean = False
+
     def __init__(self, is_discrete: bool = False):
         super().__init__()
 
@@ -102,13 +104,19 @@ class TanhBottleneck(Bottleneck):
     def decode(self, x):
         return x
 
-def vae_sample(mean, scale):
+def vae_stats(mean, scale):
+        """由编码器输出的 mean / scale 计算 std 与 KL，不做采样。"""
         stdev = nn.functional.softplus(scale) + 1e-4
         var = stdev * stdev
         logvar = torch.log(var)
-        latents = torch.randn_like(mean) * stdev + mean
 
         kl = (mean * mean + var - logvar - 1).sum(1).mean()
+
+        return stdev, kl
+
+def vae_sample(mean, scale):
+        stdev, kl = vae_stats(mean, scale)
+        latents = torch.randn_like(mean) * stdev + mean
 
         return latents, kl
 
@@ -583,6 +591,8 @@ class DOUBLEDISTILL(Bottleneck):
 
 
 class JMASVAESSL_new_Bottleneck(Bottleneck):
+    supports_mean = True
+
     def __init__(self, 
         ssl_model_name: str = "WAVLM_LARGE",
         ssl_weight: float = 1.0,
@@ -614,14 +624,22 @@ class JMASVAESSL_new_Bottleneck(Bottleneck):
         )
 
 
-    def encode(self, x, return_info=False, inference_only = False, plot_mask=False, **kwargs):
+    def encode(self, x, return_info=False, inference_only = False, plot_mask=False, use_mean=False, **kwargs):
         info = {}
         original_x = x.clone()
 
-        # VAE采样
+        # VAE：拆出 mean / scale
         mean, scale = x.chunk(2, dim=1)
-        x, kl = vae_sample(mean, scale)
+        stdev, kl = vae_stats(mean, scale)
+        if use_mean:
+            # 确定性编码：直接用后验均值作为 latent，不引入采样噪声
+            x = mean
+        else:
+            x = mean + torch.randn_like(mean) * stdev
         info["kl"] = kl
+        # 无论是否采样，都把后验统计量返回给调用方，便于提取 mean
+        info["mean"] = mean
+        info["scale"] = scale
 
         audio = kwargs.get("audio")
         #判断是否使用维度拆分
