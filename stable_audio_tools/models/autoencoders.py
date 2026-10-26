@@ -715,6 +715,13 @@ class AudioAutoencoder(nn.Module):
         self.is_discrete = self.bottleneck is not None and self.bottleneck.is_discrete
 
     def encode(self, audio, skip_bottleneck: bool = False, return_info=False, skip_pretransform=False, iterate_batch=False, **kwargs):
+        '''
+        Encode audio into latents.
+        Extra kwargs are forwarded to the bottleneck, e.g.
+          - `use_mean=True`: 用 VAE 后验均值作为 latent（确定性编码，无采样噪声）
+          - `return_info=True`: 额外返回 info 字典（含 "mean" / "scale" / "kl"）
+          - `inference_only=True`: 跳过 SSL 对齐损失
+        '''
 
         info = {}
 
@@ -781,6 +788,18 @@ class AudioAutoencoder(nn.Module):
             return latents, info
 
         return latents
+
+    def encode_mean(self, audio, return_info=False, **kwargs):
+        '''
+        确定性编码接口：直接用 VAE 后验均值 mean 作为 latent（不做重参数化采样）。
+        适用于抽取特征 / 重建评估等需要可复现结果的场景。
+        '''
+        if self.bottleneck is None or not getattr(self.bottleneck, "supports_mean", False):
+            raise RuntimeError(
+                f"{type(self.bottleneck).__name__ if self.bottleneck is not None else 'None'} "
+                "does not support mean latents (use_mean=True)."
+            )
+        return self.encode(audio, use_mean=True, return_info=return_info, **kwargs)
 
     def decode(self, latents, skip_bottleneck: bool = False, iterate_batch=False, **kwargs):
 
@@ -909,6 +928,9 @@ class AudioAutoencoder(nn.Module):
             return self.encode(audio, **kwargs)
         else:
             # CHUNKED ENCODING
+            # chunked 模式只返回拼接后的 latents，忽略 return_info，
+            # 但其余 kwargs（如 use_mean=True）需要透传给 self.encode
+            kwargs.pop("return_info", None)
             # samples_per_latent is just the downsampling ratio (which is also the upsampling ratio)
             samples_per_latent = int(self.downsampling_ratio)
             total_size = audio.shape[2] # in samples
@@ -935,7 +957,7 @@ class AudioAutoencoder(nn.Module):
             for i in range(num_chunks):
                 x_chunk = chunks[i,:]
                 # encode the chunk
-                y_chunk = self.encode(x_chunk)
+                y_chunk = self.encode(x_chunk, **kwargs)
                 # figure out where to put the audio along the time domain
                 if i == num_chunks-1:
                     # final chunk always goes at the end
