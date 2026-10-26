@@ -7,7 +7,6 @@ JMAS-VAE is a lightweight release of a 16 kHz speech VAE based on the Stable Aud
 
 For inference, both models use the same lightweight configuration because the SSL/WavLM module is only used as a training loss and is not needed for latent extraction or waveform reconstruction.
 
-> Paper: [![arXiv](https://img.shields.io/badge/arXiv-2604.12383-b31b1b.svg?style=flat-square&logo=arxiv)](https://arxiv.org/abs/2604.12383)
 > Pretrained models: [![Hugging Face](https://img.shields.io/badge/HuggingFace-ch--cheng%2FJMAS--VAE-ffd21e.svg?style=flat-square&logo=huggingface)](https://huggingface.co/ch-cheng/JMAS-VAE)
 
 ## Repository Layout
@@ -35,7 +34,7 @@ If you prefer to control the PyTorch build manually, install `torch` and `torcha
 
 ## Training
 
-The default training setup is documented with LibriLight-style local audio directories. Edit `configs/local_dataset.json` and point `path` to your local LibriLight audio directory:
+The default training setup is documented with LibriLight-style local audio directories. Edit `configs/local_dataset.json` and point `path` to your local LibriHeavy audio directory:
 
 ```json
 {
@@ -43,7 +42,7 @@ The default training setup is documented with LibriLight-style local audio direc
     "datasets": [
         {
             "id": "train",
-            "path": "/path/to/librilight/audio_dir"
+            "path": "/path/to/libriheavy/audio_dir"
         }
     ]
 }
