@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 
 import librosa
+import numpy as np
 import soundfile as sf
 import torch
 from tqdm import tqdm
@@ -71,58 +72,100 @@ def load_vae_model(model_path, model_config, device="cpu"):
 
 # -------------------------- 拆分：纯编码函数（仅输出隐向量）--------------------------
 @torch.no_grad()
-def vae_encode(model, audio, fs, device="cpu"):
-    """仅编码音频，返回CPU格式的隐向量 + 原始音频长度（用于重建裁剪）"""
-    original_length = audio.shape[0]
+def vae_encode(model, audio, fs, device="cpu", use_mean=False):
+    """仅编码音频，返回CPU格式的隐向量 + 重建裁剪长度（TARGET_FS 域下的有效样本数）
+
+    use_mean=True 时使用 VAE 后验均值作为隐向量（确定性、可复现），否则为重参数化采样。
+
+    注意：返回的长度必须是重采样到 TARGET_FS 之后的样本数。若用原始采样率下的长度，
+    解码结果（16 kHz）与它对不上（例如 24 kHz 输入会差约 1.5 倍）。
+    """
     # 重采样
     audio = librosa.resample(audio, orig_sr=fs, target_sr=TARGET_FS)
+    target_length = int(audio.shape[0])
     audio = torch.as_tensor(audio, dtype=torch.float32).to(device=device)
     audio = model.preprocess_audio_for_encoder(audio, TARGET_FS)
     # 编码得到隐向量
     latents = model.encode_audio(
-        audio, inference_only=True, chunked=False, overlap=32, chunk_size=128, return_info=False
+        audio,
+        inference_only=True,
+        chunked=False,
+        overlap=32,
+        chunk_size=128,
+        return_info=False,
+        use_mean=use_mean,
     )
     # 立即移到CPU保存，释放GPU显存
     latents = latents.cpu()
-    return latents, original_length
+    return latents, target_length
 
 # -------------------------- 拆分：纯解码函数（仅从隐向量重建）--------------------------
 @torch.no_grad()
 def vae_decode(model, latents, original_length, device="cpu"):
-    """仅从隐向量解码，返回重建后的音频"""
+    """仅从隐向量解码，返回重建后的音频（裁剪到 original_length，单位 TARGET_FS 采样点）"""
     latent_noise = 0  # 可调整隐空间噪声
     latents = latents.to(device)
     if latent_noise > 0:
         latents = latents + torch.randn_like(latents) * latent_noise
     # 解码
     decoded = model.decode_audio(latents, chunked=False, overlap=32, chunk_size=128)
-    reconstructed_audio = decoded.squeeze().cpu().numpy()[:original_length]
-    assert reconstructed_audio.shape[0] == original_length, (reconstructed_audio.shape, original_length)
+    reconstructed_audio = decoded.squeeze().cpu().numpy()
+    # 解码长度 = latent_len * downsampling_ratio + 固定偏移（BigVGAN 卷积 padding），
+    # 且编码前音频会被补零到 downsampling_ratio 的整数倍，所以 decoded_len 通常 >= 真实长度。
+    # 长度对齐策略：长截断，短补 0。
+    expected_length = int(original_length)
+    if reconstructed_audio.shape[-1] > expected_length:
+        reconstructed_audio = reconstructed_audio[..., :expected_length]
+    elif reconstructed_audio.shape[-1] < expected_length:
+        reconstructed_audio = np.pad(
+            reconstructed_audio, (0, expected_length - reconstructed_audio.shape[-1])
+        )
     return reconstructed_audio
 
 # -------------------------- 步骤1：编码并保存隐向量到本地 --------------------------
-def process_encode(inf_audio, model, device, latent_dir):
-    """编码单条音频，将隐向量+原始长度保存为.pt文件"""
+def process_encode(inf_audio, model, device, latent_dir, use_mean=False):
+    """编码单条音频，将隐向量+重建长度+源音频信息保存为.pt文件"""
     # 读取音频
     inf, fs = sf.read(inf_audio, dtype="float32")
     # 编码
-    latents, original_length = vae_encode(model, inf, fs, device)
+    latents, target_length = vae_encode(model, inf, fs, device, use_mean=use_mean)
     # 生成保存路径（音频名对应隐向量名）
     audio_name = Path(inf_audio).name
     latent_save_path = latent_dir / f"{audio_name}.pt"
-    # 保存（包含隐向量+原始长度，缺一不可）
+    # 保存：original_length 为 TARGET_FS 域下的有效样本数（重建裁剪据此进行），
+    # 另外记录源音频的采样率/长度，便于排查长度问题
     torch.save({
         "latents": latents,
-        "original_length": original_length
+        "original_length": target_length,
+        "sample_rate": TARGET_FS,
+        "source_length": int(inf.shape[0]),
+        "source_sr": int(fs),
     }, latent_save_path)
 
 # -------------------------- 步骤2：加载隐向量并重建音频 --------------------------
+_LEGACY_WARNED = False
+
+def _warn_legacy_latents():
+    """旧版 .pt 只存了原始采样率下的长度，重建长度只能近似，整轮提示一次即可。"""
+    global _LEGACY_WARNED
+    if _LEGACY_WARNED:
+        return
+    _LEGACY_WARNED = True
+    print(
+        "[decode] WARNING: legacy latent file detected (no `sample_rate` inside .pt). "
+        "`original_length` was recorded at the source sample rate, so the reconstructed "
+        "waveform length is only approximate. Re-run `--mode encode` for exact lengths.",
+        flush=True,
+    )
+
 def process_decode(latent_file_path, model, device, output_dir, output_format="wav"):
     """加载本地隐向量，解码重建音频"""
     # 加载隐向量和原始音频长度
     latent_data = torch.load(latent_file_path, map_location="cpu")
     latents = latent_data["latents"]
-    original_length = latent_data["original_length"]
+    original_length = int(latent_data["original_length"])
+    if "sample_rate" not in latent_data:
+        _warn_legacy_latents()
     # 解码重建
     recon_audio = vae_decode(model, latents, original_length, device)
     # 保存重建音频
@@ -161,7 +204,7 @@ def main(args):
         # 加载模型并编码
         model = load_vae_model(args.model_path, args.model_config, device=args.device)
         for audio_path in tqdm(audio_paths, desc="Encoding audio"):
-            process_encode(audio_path, model, args.device, latent_dir)
+            process_encode(audio_path, model, args.device, latent_dir, use_mean=args.use_mean)
         print(f"Latents saved to: {latent_dir}")
 
     # ==================== 模式2：加载隐向量 → 重建音频 ====================
@@ -253,6 +296,11 @@ if __name__ == "__main__":
         type=str,
         default="cpu",
         help="Device: cuda / cpu",
+    )
+    parser.add_argument(
+        "--use_mean",
+        action="store_true",
+        help="encode: 用 VAE 后验均值 mean 作为隐向量（确定性，无采样噪声）",
     )
     parser.add_argument(
         "--nsplits",
