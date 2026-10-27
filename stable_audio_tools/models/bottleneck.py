@@ -121,17 +121,26 @@ def vae_sample(mean, scale):
         return latents, kl
 
 class VAEBottleneck(Bottleneck):
+    supports_mean = True
+
     def __init__(self):
         super().__init__(is_discrete=False)
 
-    def encode(self, x, return_info=False, **kwargs):
+    def encode(self, x, return_info=False, use_mean=False, **kwargs):
         info = {}
 
         mean, scale = x.chunk(2, dim=1)
-
-        x, kl = vae_sample(mean, scale)
+        stdev, kl = vae_stats(mean, scale)
+        if use_mean:
+            # 确定性编码：直接用后验均值作为 latent，不引入采样噪声
+            x = mean
+        else:
+            x = mean + torch.randn_like(mean) * stdev
 
         info["kl"] = kl
+        # 无论是否采样，都把后验统计量返回给调用方，便于提取 mean
+        info["mean"] = mean
+        info["scale"] = scale
 
         if return_info:
             return x, info
@@ -268,6 +277,8 @@ class SSLoss(nn.Module):
 
 # VAE-SSL瓶颈层
 class VAESSLBottleneck(Bottleneck):
+    supports_mean = True
+
     def __init__(self, mask_prob=0.3, mask_time=40, stride_time=1):
         super().__init__(is_discrete=False)
 
@@ -287,14 +298,22 @@ class VAESSLBottleneck(Bottleneck):
             mask_prob=mask_prob
         )
 
-    def encode(self, x, audio, return_info=False, plot_mask=False, **kwargs):
+    def encode(self, x, audio, return_info=False, plot_mask=False, use_mean=False, **kwargs):
         info = {}
 
-        # VAE采样
+        # VAE：拆出 mean / scale
         mean, scale = x.chunk(2, dim=1)
-        x, kl = vae_sample(mean, scale)
+        stdev, kl = vae_stats(mean, scale)
+        if use_mean:
+            # 确定性编码：直接用后验均值作为 latent，不引入采样噪声
+            x = mean
+        else:
+            x = mean + torch.randn_like(mean) * stdev
         x_initial = x.clone()
         info["kl"] = kl
+        # 无论是否采样，都把后验统计量返回给调用方，便于提取 mean
+        info["mean"] = mean
+        info["scale"] = scale
 
         # 训练时应用掩码
         mask_original = None
